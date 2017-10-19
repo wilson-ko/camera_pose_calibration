@@ -8,6 +8,7 @@ add_compile_options(-Wall -Wextra)
 
 find_package(catkin REQUIRED COMPONENTS
 	cv_bridge
+	dr_eigen
 	eigen_conversions
 	geometry_msgs
 	image_transport

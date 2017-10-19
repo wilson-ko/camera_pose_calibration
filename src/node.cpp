@@ -23,7 +23,13 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/common/transforms.h>
 
+#include <dr_eigen/ros.hpp>
+#include <dr_eigen/yaml.hpp>
+#include <dr_eigen/eigen.hpp>
+
 #include <eigen_conversions/eigen_msg.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf/transform_datatypes.h>
 #include <tf_conversions/tf_eigen.h>
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
@@ -46,10 +52,10 @@ namespace {
 	}
 
 	/// Topic to read point cloud from.
-	constexpr char const * cloud_topic = "points_registered";
+	constexpr char const * cloud_topic = "/sr300/depth_registered/points";
 
 	/// Topic to read image from.
-	constexpr char const * image_topic = "image_color";
+	constexpr char const * image_topic = "/sr300/rgb/image_color";
 }
 
 CameraPoseCalibrationNode::CameraPoseCalibrationNode() :
@@ -63,6 +69,8 @@ CameraPoseCalibrationNode::CameraPoseCalibrationNode() :
 	source_cloud_publisher             = node_handle.advertise<pcl::PointCloud<pcl::PointXYZ>>("source", 1, true);
 	projected_source_cloud_publisher   = node_handle.advertise<pcl::PointCloud<pcl::PointXYZ>>("projected_source", 1, true);
 	calibration_plane_marker_publisher = node_handle.advertise<visualization_msgs::Marker>("calibration_plane", 1, true);
+	result                             = node_handle.advertise<geometry_msgs::PoseStamped>("pose_result", 1, true);
+	camera_pose                        = node_handle.advertise<geometry_msgs::PoseStamped>("camera_pose", 1, true);
 	detected_pattern_publisher         = image_transport.advertise("detected_pattern", 1, true);
 
 	calibrate_server_call  = node_handle.advertiseService("calibrate_call",  &CameraPoseCalibrationNode::onCalibrateCall,  this);
@@ -70,7 +78,8 @@ CameraPoseCalibrationNode::CameraPoseCalibrationNode() :
 	calibrate_server_file  = node_handle.advertiseService("calibrate_file",  &CameraPoseCalibrationNode::onCalibrateFile,  this);
 
 	// parameters
-	publish_transform = getParam(node_handle, "publish_transform", false);
+	//publish_transform = getParam(node_handle, "publish_transform", false);
+	publish_transform = false;
 	publish_rate      = getParam(node_handle, "publish_rate", 1);
 
 	if (publish_transform) {
@@ -211,8 +220,32 @@ bool CameraPoseCalibrationNode::calibrate(
 		}
 	}
 
+	// Get the transform between camera frame and the root of the camera tf tree.
+	Eigen::Isometry3d camera_to_root;
+	try {
+		tf::StampedTransform root_transform;
+		if (!transform_listener.waitForTransform("sr300_link", "sr300_rgb_optical_frame", now, ros::Duration(1.0))) {
+			ROS_ERROR_STREAM("Failed to find root transform.");
+			return false;
+		}
+		transform_listener.lookupTransform("sr300_rgb_optical_frame", "sr300_link", now, root_transform);
+
+		tf::transformTFToEigen(root_transform, camera_to_root);
+	} catch (tf::TransformException const & e) {
+		ROS_ERROR_STREAM("Failed to find transform. Error: " << e.what());
+		return false;
+	}
+
 	// transform for target to camera frame
-	Eigen::Isometry3d camera_to_target = tag_to_target * camera_to_tag;
+	//Eigen::Isometry3d camera_to_target =  tag_to_target * camera_to_tag.inverse();
+	// Camera_to_target is the camera pose in target frame
+	// Tag_to_target is the tag in target frame
+	// Camera_to_tag is the camera in tag frame
+	Eigen::Isometry3d camera_to_target =  tag_to_target * camera_to_tag;
+	ROS_INFO_STREAM("Camera to target " << dr::toYaml(camera_to_target));
+	Eigen::Isometry3d target_to_root   =  camera_to_target * camera_to_root;
+
+	ROS_INFO_STREAM("Answer: " << dr::toYaml(target_to_root));
 
 	// clone image and draw detection
 	cv::Mat detected_pattern = image.clone();
@@ -255,6 +288,13 @@ bool CameraPoseCalibrationNode::calibrate(
 	projected_source_cloud_publisher.publish(debug_information.projected_source_cloud);
 	detected_pattern_publisher.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", detected_pattern).toImageMsg());
 
+	geometry_msgs::PoseStamped calib_msg = dr::toRosPoseStamped(camera_to_tag, cloud->header.frame_id, ros::Time::now());
+	geometry_msgs::PoseStamped camera_msg = dr::toRosPoseStamped(camera_to_target, "tool0", ros::Time::now());
+	result.publish(calib_msg);
+	camera_pose.publish(camera_msg);
+
+//	ROS_INFO_STREAM(dr::toYaml(dr::quaternionToRpy(Eigen::Quaterniond{camera_to_target.rotation()})));
+//	ROS_INFO_STREAM(dr::toYaml(camera_to_target.translation()));
 	ROS_INFO_STREAM(cloud->header.frame_id << " to " << tag_frame << " :\n" << camera_to_tag.matrix() );
 	ROS_INFO_STREAM(cloud->header.frame_id << " to " << target_frame << " :\n" << camera_to_target.matrix() );
 

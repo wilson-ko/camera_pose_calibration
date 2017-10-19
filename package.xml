@@ -16,6 +16,7 @@
 
 	<buildtool_depend>catkin</buildtool_depend>
 	<depend>cv_bridge</depend>
+	<depend>dr_eigen</depend>
 	<depend>cmake_modules</depend>
 	<depend>dr_base</depend>
 	<depend>eigen_conversions</depend>

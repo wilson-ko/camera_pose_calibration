@@ -52,6 +52,9 @@ protected:
 	/// Publishes tf transforms.
 	tf::TransformBroadcaster transform_broadcaster;
 
+	ros::Publisher result;
+	ros::Publisher camera_pose;
+
 	/// Publishes the original pointcloud.
 	ros::Publisher cloud_publisher;
 
